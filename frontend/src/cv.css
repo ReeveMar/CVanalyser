@@ -1,0 +1,96 @@
+/* cv.css - Printable 1-Page HTML CV Stylesheet */
+
+.cv-paper-container {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 1.5rem 0;
+  background: var(--bg-dark, #F3F5F4);
+  border-radius: 16px;
+}
+
+.cv-paper {
+  width: 100%;
+  max-width: 800px;
+  min-height: 1000px;
+  background: #FFFFFF;
+  color: #111915;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  padding: 3rem 3.5rem;
+  border-radius: 12px;
+  border: 1px solid #E2E8E4;
+  box-shadow: 0 8px 30px rgba(13, 71, 51, 0.06);
+  box-sizing: border-box;
+  line-height: 1.55;
+  font-size: 0.95rem;
+}
+
+/* Header & Candidate Name */
+.cv-header-title {
+  font-size: 1.85rem;
+  font-weight: 800;
+  color: #0D4733;
+  letter-spacing: -0.03em;
+  margin-top: 0;
+  margin-bottom: 0.4rem;
+  text-transform: uppercase;
+}
+
+.cv-contact-info {
+  font-size: 0.9rem;
+  color: #5C7063;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 2px solid #E2E8E4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* Section Headings */
+.cv-section-heading {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #0D4733;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 1.25rem;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1.5px solid #0D4733;
+}
+
+/* Subheadings / Role Titles */
+.cv-subheading {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1D2B24;
+  margin-top: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.cv-body-text {
+  font-size: 0.93rem;
+  color: #2D3D34;
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+/* Bullet Lists */
+.cv-bullet-list {
+  margin-top: 0.35rem;
+  margin-bottom: 0.85rem;
+  padding-left: 1.35rem;
+}
+
+.cv-bullet-item {
+  font-size: 0.92rem;
+  color: #2D3D34;
+  margin-bottom: 0.35rem;
+  line-height: 1.5;
+}
+
+.cv-bold {
+  font-weight: 600;
+  color: #111915;
+}
