@@ -7,13 +7,18 @@ import schemas
 import auth
 from database import get_db
 from fastapi.security import OAuth2PasswordRequestForm
+from services.limiter import rate_limit
 
 router = APIRouter(
     prefix="/api/users",
     tags=["users"]
 )
 
-@router.post("/register", response_model=schemas.UserResponse)
+@router.post(
+    "/register",
+    response_model=schemas.UserResponse,
+    dependencies=[Depends(rate_limit("register", limit=5, period=60))]
+)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
     if db_user:
@@ -25,7 +30,11 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.refresh(new_user)
     return new_user
 
-@router.post("/login", response_model=schemas.Token)
+@router.post(
+    "/login",
+    response_model=schemas.Token,
+    dependencies=[Depends(rate_limit("login", limit=5, period=60))]
+)
 def login(
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -46,7 +55,11 @@ def login(
     auth.set_auth_cookies(response, access_token, refresh_token)
     return {"message": "Authenticated successfully"}
 
-@router.post("/refresh", response_model=schemas.Token)
+@router.post(
+    "/refresh",
+    response_model=schemas.Token,
+    dependencies=[Depends(rate_limit("refresh", limit=15, period=60))]
+)
 def refresh_token(request: Request, response: Response, db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

@@ -36,9 +36,13 @@ def fix_spaced_name(text: str) -> str:
 
     return text
 
+MAX_PDF_PAGES = 15
+
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
-    """Extract text content from raw PDF bytes."""
+    """Extract text content from raw PDF bytes with safety limits against page bomb DoS."""
     reader = PdfReader(io.BytesIO(pdf_bytes))
+    if len(reader.pages) > MAX_PDF_PAGES:
+        raise ValueError(f"PDF exceeds the maximum allowed page count ({MAX_PDF_PAGES} pages). Please upload a standard 1-3 page CV.")
     extracted_text = []
     for page in reader.pages:
         text = page.extract_text()
@@ -100,10 +104,10 @@ def sanitize_and_format_text(text: str) -> str:
 
     return text.strip()
 
-def build_pdf_from_text(cv_text: str, output_path: str):
-    """Generate a clean, 1-page professional PDF file from CV text content."""
+def build_pdf_from_text(cv_text: str, output_target):
+    """Generate a clean, 1-page professional PDF file or buffer from CV text content."""
     doc = SimpleDocTemplate(
-        output_path,
+        output_target,
         pagesize=letter,
         rightMargin=30,
         leftMargin=30,
@@ -187,4 +191,25 @@ def build_pdf_from_text(cv_text: str, output_path: str):
             is_first_line = False
 
     doc.build(story)
+    if hasattr(output_target, "flush"):
+        output_target.flush()
+
+def generate_pdf_bytes(cv_text: str) -> bytes:
+    """Generate in-memory PDF bytes from CV text content with graceful fallback."""
+    buf = io.BytesIO()
+    try:
+        build_pdf_from_text(cv_text, buf)
+    except Exception as e:
+        print(f"Warning: styled PDF build failed, falling back to safe plain rendering: {e}")
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+        fallback_styles = getSampleStyleSheet()
+        story = []
+        for line in cv_text.strip().split("\n"):
+            clean_l = sanitize_and_format_text(line)
+            story.append(Paragraph(clean_l if clean_l else "&nbsp;", fallback_styles["Normal"]))
+            story.append(Spacer(1, 3))
+        doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
 

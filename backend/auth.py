@@ -15,10 +15,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
 SECRET_KEY = os.environ.get("SECRET_KEY", "YOUR_SUPER_SECRET_KEY_HERE_FOR_DEVELOPMENT")
+
+if ENVIRONMENT == "production" and (not SECRET_KEY or SECRET_KEY == "YOUR_SUPER_SECRET_KEY_HERE_FOR_DEVELOPMENT"):
+    raise RuntimeError("FATAL: In production, SECRET_KEY must be explicitly set to a strong, random secret key!")
+
 ALGORITHM = os.environ.get("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+SECURE_COOKIES = os.environ.get("COOKIE_SECURE", "").lower() in ("true", "1", "yes") or ENVIRONMENT == "production"
+COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "lax")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/users/login", auto_error=False)
@@ -26,6 +33,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/users/login", auto_error=Fals
 def validate_password(password):
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+    if len(password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="Password cannot exceed 72 bytes in length")
     if not re.search(r"[a-z]", password):
         raise HTTPException(status_code=400, detail="Password must contain at least one lowercase letter")
     if not re.search(r"[A-Z]", password):
@@ -64,13 +73,13 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
-    # Set HttpOnly, SameSite=lax cookies so JavaScript cannot access them
+    # Set HttpOnly cookies to prevent client script tampering
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        samesite="lax",
-        secure=False, # Set to True in production with HTTPS
+        samesite=COOKIE_SAMESITE,
+        secure=SECURE_COOKIES,
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/"
     )
@@ -78,8 +87,8 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        samesite="lax",
-        secure=False, # Set to True in production with HTTPS
+        samesite=COOKIE_SAMESITE,
+        secure=SECURE_COOKIES,
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         path="/api/users"
     )

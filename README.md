@@ -25,54 +25,22 @@
 ### Backend
 - **Framework**: [FastAPI](https://fastapi.tiangolo.com/) (Python 3.10+)
 - **Server**: Uvicorn
-- **Database / ORM**: SQLAlchemy (SQLite for development / PostgreSQL ready)
-- **Object Storage**: AWS S3 / MinIO (via `boto3`)
-- **AI Integration**: OpenAI API
+- **Database / ORM**: SQLAlchemy with PostgreSQL 16 (production) or SQLite (development)
+- **Object Storage**: AWS S3 (via `boto3`) with Server-Side Encryption (AES256)
+- **AI Integration**: AWS Bedrock Mantle / OpenAI API
 - **Caching**: Redis
+- **Reverse Proxy**: Nginx (production gateway)
 
 ### Infrastructure & DevOps
-- **Containerization**: Docker & Docker Compose
-
----
-
-## Project Structure
-
-```text
-CVanalyser/
-├── backend/
-│   ├── app/ (or routers, models, schemas)
-│   ├── auth.py          # Authentication handlers (JWT & password hashing)
-│   ├── database.py      # SQLAlchemy database session & engine
-│   ├── models.py        # Database tables (Users, UserFiles)
-│   ├── main.py          # FastAPI application entrypoint
-│   ├── schemas.py       # Pydantic schemas
-│   ├── requirements.txt # Python dependencies
-│   └── Dockerfile       # Backend container definition
-├── frontend/
-│   ├── src/             # React components, pages, & assets
-│   ├── index.html       # HTML entrypoint
-│   ├── package.json     # Frontend dependencies & scripts
-│   ├── vite.config.js   # Vite configuration
-│   └── Dockerfile       # Frontend container definition
-├── docker-compose.yml   # Orchestration for Backend, Frontend, and Redis
-├── spec.md              # Project technical specification
-├── nextsteps.md         # Planned feature roadmap
-└── README.md            # Project documentation
-```
+- **Containerization**: Docker & Docker Compose (`docker-compose.prod.yml`)
+- **Web Server**: Nginx (Reverse Proxy, SSL, Gzip, SPA routing)
+- **WSGI / ASGI**: Gunicorn with Uvicorn workers
 
 ---
 
 ## 🚀 Getting Started
 
-### Prerequisites
-
-- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/)
-*OR*
-- **Python 3.10+** & **Node.js 18+** installed locally.
-
----
-
-### Option 1: Quickstart with Docker Compose (Recommended)
+### Local Development (Quickstart)
 
 1. **Clone the repository**:
    ```bash
@@ -80,82 +48,52 @@ CVanalyser/
    cd CVanalyser
    ```
 
-2. **Set up Environment Variables**:
-   Copy `.example.env` to `.env` in the `backend/` directory and update your configuration .
+2. **Configure environment**:
    ```bash
    cp .example.env backend/.env
    ```
 
-3. **Start the containers**:
+3. **Start local development containers**:
    ```bash
    docker-compose up --build
    ```
 
-4. **Access the Application**:
-   - **Frontend**: `http://localhost:5173`
-   - **Backend API Docs**: `http://localhost:8000/docs`
-   - **Redis Cache**: `localhost:6379`
-
 ---
 
-### Option 2: Local Development without Docker
+## 🌐 Production Deployment on Local Ubuntu Server
 
-#### 1. Backend Setup
+A complete provisioning script and production Docker Compose configuration are provided:
 
-```bash
-# Navigate to backend
-cd backend
+1. **Prerequisites & S3 Setup**:
+   - Follow the detailed guide in [`docs/AWS_S3_IAM_GUIDE.md`](docs/AWS_S3_IAM_GUIDE.md) to set up your S3 bucket and IAM user.
 
-# Create and activate virtual environment
-python -m venv venv
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
+2. **Automated Server Provisioning**:
+   On your Ubuntu 22.04 / 24.04 server, clone the repository and run:
+   ```bash
+   sudo ./scripts/setup_ubuntu_server.sh
+   ```
+   This will:
+   - Install Docker Engine and Docker Compose.
+   - Configure UFW firewall (allowing ports 22, 80, 443).
+   - Generate secure random secrets into `.env.prod`.
+   - Register a `systemd` service (`cvanalyser.service`) to start on boot.
 
-# Install dependencies
-pip install -r requirements.txt
+3. **Configure Production Credentials**:
+   Edit `.env.prod` to provide your S3 credentials:
+   ```bash
+   nano .env.prod
+   ```
 
-# Start FastAPI server
-uvicorn main:app --reload --port 8000
-```
+4. **Start the Production Stack**:
+   ```bash
+   sudo systemctl start cvanalyser
+   # Or manually:
+   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+   ```
 
-#### 2. Frontend Setup
-
-```bash
-# Open a new terminal and navigate to frontend
-cd frontend
-
-# Install Node modules
-npm install
-
-# Start Vite dev server
-npm run dev
-```
-
----
-
-## Environment Variables
-
-Make sure to configure the following in `backend/.env`:
-
-| Variable | Description |
-| :--- | :--- |
-| `BEDROCK_API_KEY` | Bedrock API key for CV analysis & cover letter generation |
-| `BEDROCK_BASE_URL` | Bedrock API base URL |
-| `DATABASE_URL` | Database connection string (defaults to `sqlite:///./sql_app.db`) |
-| `REDIS_URL` | Redis connection URL (defaults to `redis://localhost:6379/0`) |
-| `SECRET_KEY` | JWT signing secret key |
-| `ALGORITHM` | JWT hashing algorithm (defaults to `HS256`) |
-| `AWS_ACCESS_KEY_ID` | Object Storage access key |
-| `AWS_SECRET_ACCESS_KEY` | Object Storage secret key |
-| `S3_BUCKET_NAME` | Storage bucket name for uploaded CV files |
-
----
-
-## 🗺️ Roadmap & Future Enhancements
-
-- ☁️ **Cloud Deployment**: Deployment on AWS EC2 with automated CI/CD pipeline.
+5. **Access the Application**:
+   - Web application: `http://<your-server-ip>` or `http://<your-domain>`
+   - Healthcheck: `http://<your-server-ip>/api/health`
 
 ---
 
