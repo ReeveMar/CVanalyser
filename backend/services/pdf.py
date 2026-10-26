@@ -6,6 +6,36 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib import colors
 
+def fix_spaced_name(text: str) -> str:
+    """
+    Detects and fixes names or headers where letters are separated by single spaces,
+    e.g., 'R E E V E   M A R' -> 'REEVE MAR' or 'J o h n   D o e' -> 'John Doe'.
+    """
+    if not text:
+        return text
+
+    # Handle multi-space separated words with single-letter spacing (e.g., "R E E V E   M A R")
+    if "  " in text:
+        parts = [p.strip() for p in text.split("  ") if p.strip()]
+        new_words = []
+        is_spaced_header = False
+        for p in parts:
+            tokens = p.split()
+            if len(tokens) > 1 and all(len(t) == 1 and t.isalpha() for t in tokens):
+                new_words.append("".join(tokens))
+                is_spaced_header = True
+            else:
+                new_words.append(p)
+        if is_spaced_header:
+            return " ".join(new_words)
+
+    # Handle single string of single-letter tokens (e.g., "R E E V E")
+    tokens = text.split()
+    if len(tokens) >= 3 and all(len(t) == 1 and t.isalpha() for t in tokens):
+        return "".join(tokens)
+
+    return text
+
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     """Extract text content from raw PDF bytes."""
     reader = PdfReader(io.BytesIO(pdf_bytes))
@@ -13,8 +43,62 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     for page in reader.pages:
         text = page.extract_text()
         if text:
-            extracted_text.append(text)
+            text = text.replace('\u00ad', '').replace('\u200b', '').replace('\ufeff', '').replace('\u2060', '')
+            lines = [fix_spaced_name(line) for line in text.split('\n')]
+            extracted_text.append("\n".join(lines))
     return "\n".join(extracted_text)
+
+def sanitize_and_format_text(text: str) -> str:
+    """
+    Sanitizes Unicode characters unsupported by ReportLab's standard Helvetica font,
+    normalizes whitespace and spaced-out names, and converts Markdown bold/italic syntax.
+    """
+    if not text:
+        return ""
+
+    # Fix spaced-out letters in names or titles
+    text = fix_spaced_name(text)
+
+    # Remove zero-width spaces / soft hyphens
+    text = text.replace('\u00ad', '').replace('\u200b', '').replace('\ufeff', '').replace('\u2060', '')
+
+    # Replace unsupported unicode hyphens, dashes, quotes, non-breaking spaces with standard ASCII
+    replacements = {
+        '\u2010': '-',  # hyphen
+        '\u2011': '-',  # non-breaking hyphen
+        '\u2012': '-',  # figure dash
+        '\u2013': '-',  # en dash
+        '\u2014': '-',  # em dash
+        '\u2015': '-',  # horizontal bar
+        '\u2018': "'",  # left single quote
+        '\u2019': "'",  # right single quote
+        '\u201a': "'",  # single low-9 quote
+        '\u201b': "'",  # single high-reversed-9 quote
+        '\u201c': '"',  # left double quote
+        '\u201d': '"',  # right double quote
+        '\u201e': '"',  # double low-9 quote
+        '\u2026': '...',# ellipsis
+        '\u00a0': ' ',  # non-breaking space
+    }
+    for char, repl in replacements.items():
+        text = text.replace(char, repl)
+
+    # Ensure literal em-dashes and en-dashes are converted to standard hyphens
+    text = text.replace('—', '-').replace('–', '-')
+
+    # Normalize multiple spaces down to a single space
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+
+    # HTML escape special chars first
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Convert **bold** and *italic* markdown syntax to ReportLab HTML tags
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
+    text = re.sub(r'__(.*?)__', r'<b>\1</b>', text)
+    text = re.sub(r'_(.*?)_', r'<i>\1</i>', text)
+
+    return text.strip()
 
 def build_pdf_from_text(cv_text: str, output_path: str):
     """Generate a clean, 1-page professional PDF file from CV text content."""
@@ -81,23 +165,26 @@ def build_pdf_from_text(cv_text: str, output_path: str):
         
         # Format headers vs body vs bullets
         if stripped.startswith("# "):
-            clean_text = stripped[2:].strip()
+            clean_text = sanitize_and_format_text(stripped[2:].strip())
             story.append(Paragraph(clean_text, title_style))
             is_first_line = False
         elif stripped.startswith("## ") or stripped.startswith("### "):
-            clean_text = re.sub(r'^#+\s*', '', stripped)
+            clean_text = sanitize_and_format_text(re.sub(r'^#+\s*', '', stripped))
             story.append(Paragraph(clean_text, heading_style))
         elif stripped.startswith("- ") or stripped.startswith("* "):
-            clean_text = "&bull; " + stripped[2:].strip()
+            clean_text = "&bull; " + sanitize_and_format_text(stripped[2:].strip())
             story.append(Paragraph(clean_text, bullet_style))
         elif is_first_line and len(stripped) < 60 and not stripped.endswith('.'):
-            story.append(Paragraph(stripped, title_style))
+            clean_text = sanitize_and_format_text(stripped)
+            story.append(Paragraph(clean_text, title_style))
             is_first_line = False
-        elif stripped.isupper() and len(stripped) < 50:
-            story.append(Paragraph(stripped, heading_style))
+        elif stripped.isupper() and len(stripped) < 50 and any(c.isalpha() for c in stripped):
+            clean_text = sanitize_and_format_text(stripped)
+            story.append(Paragraph(clean_text, heading_style))
         else:
-            safe_text = stripped.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            story.append(Paragraph(safe_text, body_style))
+            clean_text = sanitize_and_format_text(stripped)
+            story.append(Paragraph(clean_text, body_style))
             is_first_line = False
 
     doc.build(story)
+

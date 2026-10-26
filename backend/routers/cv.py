@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 import os
 import uuid
 import redis
@@ -22,6 +23,12 @@ redis_client = redis.from_url(redis_url, decode_responses=True)
 
 UPLOAD_DIR = "bucket-name/user-files"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0"
+}
 
 @router.post("/upload", response_model=schemas.FileMetadataResponse)
 async def upload_cv(
@@ -58,6 +65,22 @@ async def upload_cv(
     unique_filename = f"{uuid.uuid4()}{file_ext}"
     file_path = os.path.join(user_dir, unique_filename)
 
+    # Clean up old generated preview PDFs for this user
+    generated_dir = os.path.join(user_dir, "generated")
+    if os.path.exists(generated_dir):
+        for old_gen in os.listdir(generated_dir):
+            if old_gen.startswith("stored_cv_"):
+                try:
+                    os.remove(os.path.join(generated_dir, old_gen))
+                except OSError:
+                    pass
+
+    # Invalidate existing Redis cache for this user
+    try:
+        redis_client.delete(f"cv:{current_user.email}")
+    except Exception as e:
+        print(f"Redis cache invalidate warning: {e}")
+
     # Replace existing CV in DB and mock S3
     existing_files = db.query(models.UserFile).filter(models.UserFile.user_email == current_user.email).all()
     for existing_file in existing_files:
@@ -72,31 +95,38 @@ async def upload_cv(
     with open(file_path, "wb") as f:
         f.write(contents)
 
-    # Store in DB
+    # Store in DB with explicit uploaded_at
     db_file = models.UserFile(
         user_email=current_user.email,
         object_key=file_path,
         file_name=file.filename,
         file_size=len(contents),
-        file_type=file.content_type or ("application/pdf" if filename_lower.endswith(".pdf") else "text/plain")
+        file_type=file.content_type or ("application/pdf" if filename_lower.endswith(".pdf") else "text/plain"),
+        uploaded_at=func.now()
     )
     db.add(db_file)
     db.commit()
     db.refresh(db_file)
 
-    # Cache CV text in Redis
-    redis_client.set(f"cv:{current_user.email}", decoded_contents, ex=3600) # Cache for 1 hour
+    # Cache fresh CV text in Redis
+    try:
+        redis_client.set(f"cv:{current_user.email}", decoded_contents, ex=3600) # Cache for 1 hour
+    except Exception as e:
+        print(f"Redis cache set warning: {e}")
 
     return db_file
 
 def get_user_cv(user_email: str, db: Session) -> str:
     # Try Redis first
-    cached_cv = redis_client.get(f"cv:{user_email}")
-    if cached_cv:
-        return cached_cv
+    try:
+        cached_cv = redis_client.get(f"cv:{user_email}")
+        if cached_cv:
+            return cached_cv
+    except Exception as e:
+        print(f"Redis cache get warning: {e}")
     
     # Fallback to DB and File
-    db_file = db.query(models.UserFile).filter(models.UserFile.user_email == user_email).order_by(models.UserFile.uploaded_at.desc()).first()
+    db_file = db.query(models.UserFile).filter(models.UserFile.user_email == user_email).order_by(models.UserFile.uploaded_at.desc(), models.UserFile.id.desc()).first()
     if not db_file or not os.path.exists(db_file.object_key):
         raise HTTPException(status_code=404, detail="No CV found for user")
     
@@ -109,15 +139,23 @@ def get_user_cv(user_email: str, db: Session) -> str:
             content = f.read()
     
     # Update cache
-    redis_client.set(f"cv:{user_email}", content, ex=3600)
+    try:
+        redis_client.set(f"cv:{user_email}", content, ex=3600)
+    except Exception as e:
+        print(f"Redis cache update warning: {e}")
+
     return content
 
 @router.get("/content", response_model=schemas.CVContentResponse)
 def get_cv_content(
+    response: Response,
     current_user: models.User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    db_file = db.query(models.UserFile).filter(models.UserFile.user_email == current_user.email).order_by(models.UserFile.uploaded_at.desc()).first()
+    for key, value in NO_CACHE_HEADERS.items():
+        response.headers[key] = value
+
+    db_file = db.query(models.UserFile).filter(models.UserFile.user_email == current_user.email).order_by(models.UserFile.uploaded_at.desc(), models.UserFile.id.desc()).first()
     if not db_file:
         raise HTTPException(status_code=404, detail="No CV found for user")
 
@@ -130,12 +168,46 @@ def get_cv_content(
         "is_pdf": is_pdf
     }
 
+@router.get("/pdf")
+def get_cv_pdf(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_file = db.query(models.UserFile).filter(models.UserFile.user_email == current_user.email).order_by(models.UserFile.uploaded_at.desc(), models.UserFile.id.desc()).first()
+    if not db_file or not os.path.exists(db_file.object_key):
+        raise HTTPException(status_code=404, detail="No CV found for user")
+    
+    if db_file.file_name.lower().endswith(".pdf"):
+        return FileResponse(
+            path=db_file.object_key,
+            media_type="application/pdf",
+            filename=db_file.file_name,
+            headers=NO_CACHE_HEADERS
+        )
+    else:
+        cv_content = get_user_cv(current_user.email, db)
+        sanitized_email = current_user.email.replace("@", "_at_").replace(".", "_dot_")
+        user_dir = os.path.join(UPLOAD_DIR, sanitized_email, "generated")
+        os.makedirs(user_dir, exist_ok=True)
+        temp_pdf_path = os.path.join(user_dir, f"stored_cv_{db_file.id}.pdf")
+        if not os.path.exists(temp_pdf_path):
+            build_pdf_from_text(cv_content, temp_pdf_path)
+        
+        pdf_filename = f"{os.path.splitext(db_file.file_name)[0]}.pdf"
+        return FileResponse(
+            path=temp_pdf_path,
+            media_type="application/pdf",
+            filename=pdf_filename,
+            headers=NO_CACHE_HEADERS
+        )
+
+
 @router.get("/file")
 def get_cv_file(
     current_user: models.User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    db_file = db.query(models.UserFile).filter(models.UserFile.user_email == current_user.email).order_by(models.UserFile.uploaded_at.desc()).first()
+    db_file = db.query(models.UserFile).filter(models.UserFile.user_email == current_user.email).order_by(models.UserFile.uploaded_at.desc(), models.UserFile.id.desc()).first()
     if not db_file or not os.path.exists(db_file.object_key):
         raise HTTPException(status_code=404, detail="CV file not found")
     
@@ -143,7 +215,8 @@ def get_cv_file(
     return FileResponse(
         path=db_file.object_key,
         media_type=media_type,
-        filename=db_file.file_name
+        filename=db_file.file_name,
+        headers=NO_CACHE_HEADERS
     )
 
 @router.post("/analyze", response_model=schemas.AnalysisResponse)
@@ -165,6 +238,31 @@ def generate_cl(
     cv_content = get_user_cv(current_user.email, db)
     cl = generate_cover_letter(cv_content, request.job_description)
     return {"cover_letter": cl}
+
+@router.post("/download-cover-letter")
+def download_cover_letter(
+    request: schemas.CoverLetterRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    cv_content = get_user_cv(current_user.email, db)
+    cl_text = generate_cover_letter(cv_content, request.job_description)
+    
+    sanitized_email = current_user.email.replace("@", "_at_").replace(".", "_dot_")
+    user_dir = os.path.join(UPLOAD_DIR, sanitized_email, "generated")
+    os.makedirs(user_dir, exist_ok=True)
+    
+    temp_pdf_path = os.path.join(user_dir, f"cover_letter_{uuid.uuid4()}.pdf")
+    try:
+        build_pdf_from_text(cl_text, temp_pdf_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate cover letter PDF: {str(e)}")
+
+    return FileResponse(
+        path=temp_pdf_path,
+        media_type="application/pdf",
+        filename="Cover_Letter.pdf"
+    )
 
 @router.post("/generate-improved", response_model=schemas.GenerateImprovedResponse)
 def generate_improved(

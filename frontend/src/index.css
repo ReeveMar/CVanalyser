@@ -224,9 +224,11 @@ input:focus, textarea:focus {
   transition: all 0.25s ease;
 }
 
-.upload-area:hover {
+.upload-area:hover,
+.upload-area.drag-over {
   border-color: var(--accent-primary);
   background: var(--accent-light);
+  transform: scale(1.005);
 }
 
 .upload-icon-wrapper {
