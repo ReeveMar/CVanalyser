@@ -2,7 +2,7 @@
 .env
 .env.*
 !.env.example
-!.example.env
+!.env.prod.example
 *.env
 
 # Python & Virtual Environments
